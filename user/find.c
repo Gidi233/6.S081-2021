@@ -8,7 +8,6 @@ char *name;
 void find(char *path)
 {
     char *p = path + strlen(path);
-    *p++ = '/';
     int fd;
     struct dirent de;
     struct stat st;
@@ -18,6 +17,7 @@ void find(char *path)
         fprintf(2, "find: cannot open \n");
         return;
     }
+    *p++ = '/';
     while (read(fd, &de, sizeof(de)) == sizeof(de))
     {
 
