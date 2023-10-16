@@ -6,6 +6,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"
 
 uint64
 sys_exit(void)
@@ -103,5 +104,23 @@ sys_trace(void)
   if (argint(0, &n) < 0)
     return -1;
   myproc()->trace = n;
+  return 0;
+}
+
+extern uint64 get_freemem();
+extern uint64 get_nproc();
+
+uint64
+sys_sysinfo(void)
+{
+  uint64 addr;
+  if (argaddr(0, &addr) < 0)
+    return -1;
+  struct sysinfo s;
+  s.freemem = get_freemem();
+  s.nproc = get_nproc();
+  // 这个myproc应该返回的是进行系统调用的进程（kernel是另一个进程），从该进程的页表中找到addr对应的物理地址写进去。
+  if(copyout(myproc()->pagetable,addr,(char*)&s,sizeof(s)))//要注意检查返回值
+    return -1;
   return 0;
 }
