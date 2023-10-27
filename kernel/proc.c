@@ -38,6 +38,8 @@ proc_mapstacks(pagetable_t kpgtbl) {
     if(pa == 0)
       panic("kalloc");
     uint64 va = KSTACK((int) (p - proc));
+    // printf("va:%p\n", va);
+    // printf("pa:%p\n", pa);
     kvmmap(kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
   }
 }
@@ -166,6 +168,10 @@ freeproc(struct proc *p)
   p->state = UNUSED;
 }
 
+// extern pte_t *
+// walk(pagetable_t pagetable, uint64 va, int alloc);
+// extern pagetable_t kernel_pagetable;
+
 // Create a user page table for a given process,
 // with no user memory, but with trampoline pages.
 pagetable_t
@@ -196,6 +202,40 @@ proc_pagetable(struct proc *p)
     return 0;
   }
 
+  struct usyscall *u;
+  if ((u = (struct usyscall *)kalloc()) == 0)
+  {
+    return 0;
+  }
+  u->pid=p->pid;
+  if(mappages(pagetable, USYSCALL, PGSIZE,
+              (uint64)u,PTE_U| PTE_R ) < 0){
+    uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+    uvmunmap(pagetable, TRAPFRAME, 1, 0);
+    uvmfree(pagetable, 0);
+    return 0;
+  }
+
+  // uint64 pg;
+  // // uint64 pid = (uint64)(&p);直接&p得到的在kstack,但得到的pg(物理地址)还是超过了PHYSTOP
+  // uint64 pid = (uint64)(&p->pid);
+  // if ((pg = (uint64)walk(kernel_pagetable, pid, 0)) == 0) // 按理说proc存在kstack,pid(虚拟地址)=80009618 （不应该在MAXVA往下一点吗？()，虽然也有直接映射）转换得到的pg(物理地址)=21ffe4618 超过了PHYSTOP？不应该是直接映射吗？
+  // {
+  //   panic("walk");
+  // }
+  // pg = PTE2PA(pg) + (pid - PGROUNDDOWN(pid));
+  // printf("pg:%p\n", pg);
+  // printf("pid:%p\n", pid);
+
+  // if(mappages(pagetable, USYSCALL, sizeof(struct usyscall),
+  //             pid, PTE_R|PTE_U ) < 0){
+  //   panic("mappg");
+  //   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+  //   uvmunmap(pagetable, TRAPFRAME, 1, 0);
+  //   uvmfree(pagetable, 0);
+  //   return 0;
+  // }//中断错误码是load access fault 应该是没有内存访问权限
+
   return pagetable;
 }
 
@@ -206,6 +246,7 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
+  uvmunmap(pagetable, USYSCALL, 1,1);
   uvmfree(pagetable, sz);
 }
 
