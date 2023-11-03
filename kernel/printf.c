@@ -132,3 +132,16 @@ printfinit(void)
   initlock(&pr.lock, "pr");
   pr.locking = 1;
 }
+
+void
+backtrace(void)
+{
+  uint64 fp = r_fp();
+  uint64 pgup = PGROUNDUP(fp), pgdown = PGROUNDDOWN(fp);
+  printf("backtrace:\n");
+  while (pgdown < fp && fp < pgup) // while (pgdown < fp && fp <= pgup)的话会多一个0x0000000000000012
+  {
+    printf("%p\n", *(uint64 *)(fp - 8));
+    fp = *(uint64 *)(fp - 16);
+  }
+}
