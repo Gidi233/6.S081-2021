@@ -78,7 +78,22 @@ usertrap(void)
 
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)
+  {
+    if (p->ticks)
+    {
+      p->nowticks--;
+      if (!p->nowticks )
+      {
+        p->nowticks = p->ticks;
+        p->ticks = 0;
+        // p->trapframe->ra = p->trapframe->epc; // 因为中断直接切换上下文没有用jalr指令,ra没有改变，我想试试把下一条指令地址给到ra从信号处理程序返回到中断点，而不是上下文切换，联合sysproc中的注释，但不行（因为不知道下一个指令是2还是4字节？？）而且中断时可能Function prologue还没完成，还没压栈（存ra、sp），不能做任何假定，所以只能上下文切换
+        p->sig_trapframe = *(p->trapframe);
+        p->trapframe->epc = (uint64)p->handler;
+      }
+    }
+    
     yield();
+  }
 
   usertrapret();
 }

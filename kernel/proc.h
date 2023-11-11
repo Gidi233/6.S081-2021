@@ -105,4 +105,8 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  int nowticks;
+  int ticks;
+  struct trapframe sig_trapframe; //可以在sigalarm时分配，回收进程时判断kfree
+  uint64 handler;              
 };

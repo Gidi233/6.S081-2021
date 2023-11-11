@@ -96,3 +96,30 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64 sys_sigalarm(void){
+  int ticks;
+  uint64 handler;
+  argint(0, &ticks);
+  argaddr(1, &handler);
+
+  struct proc* p = myproc();
+  p->ticks= ticks;
+  p->nowticks = ticks;
+  p->handler = handler;
+  return 0;
+}
+
+uint64 sys_sigreturn(void){
+  struct proc *p = myproc();
+  // 还原trampolice
+  // uint64 ra = p->trapframe->ra;
+  // uint64 sp = p->trapframe->sp;
+  // uint64 epc = p->trapframe->epc;
+  *(p->trapframe) = p->sig_trapframe; // 这是直接还原到中断的地方
+  p->ticks=p->nowticks;
+  // p->trapframe->ra = ra;
+  // p->trapframe->sp = sp;//这是还原到调用sigreturn最后返回的地方,但不行
+  // p->trapframe->epc= epc;
+  return 0;
+}
