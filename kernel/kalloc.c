@@ -23,20 +23,33 @@ struct {
   struct run *freelist;
 } kmem;
 
+struct{
+  struct spinlock lock;
+  uint8 **ref_cnt;
+} cowmem;
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&cowmem.lock, "cowmem");
   freerange(end, (void*)PHYSTOP);
 }
 
 void
 freerange(void *pa_start, void *pa_end)
 {
+  uint64 num = 0;
   char *p;
   p = (char*)PGROUNDUP((uint64)pa_start);
-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
+  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE,num++)
     kfree(p);
+  cowmem.ref_cnt  = (uint8 **)kalloc();//就三万多空闲页，所以二维数组分配一页就可以（能存1024（uint8*）个4096(uint8)）
+  memset(cowmem.ref_cnt, 0, PGSIZE);
+  for (int i = 0; i < num / 4096 + 1; i++){
+    cowmem.ref_cnt[i] = (uint8 *)kalloc();
+    memset(cowmem.ref_cnt[i], 0, PGSIZE); //记得置为0
+  }
 }
 
 // Free the page of physical memory pointed at by v,
@@ -79,4 +92,62 @@ kalloc(void)
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+uint8 *
+get_ref_cnt(void *pa)
+{
+  uint64 offset = ((uint64)pa - PGROUNDUP((uint64)end)) >> 12;
+  return &cowmem.ref_cnt[offset >> 12][offset % 4096];
+}
+
+void *
+cowalloc(void *pa)
+{
+  acquire(&cowmem.lock);
+  uint8 *cnt = get_ref_cnt(pa);
+  if (!*cnt)
+    *cnt = 2;
+  else
+    (*cnt)++;
+  release(&cowmem.lock);
+  return (void *)pa;
+}
+
+int
+cowcopy(pte_t *pte)
+{
+  uint8 *cnt;
+  void *pa = (void *)PTE2PA(*pte);
+  acquire(&cowmem.lock);
+  if (*(cnt = get_ref_cnt(pa)) == 1){//因为可能有直接退出的，无法得知自己的引用计数为1，所以这里也可以不去除PTE_COW标识(去除是和cowfree一样的逻辑)
+    *pte |= PTE_W;
+    *pte &= ~PTE_COW;
+    (*cnt)--;
+  }
+  else
+  {
+    uint64 *newpg;
+    if((newpg= kalloc()) == 0)
+      return 0;
+    memmove(newpg, pa, PGSIZE); // (char*)
+    *pte = (PA2PTE(newpg) | PTE_FLAGS(*pte) | PTE_W);//这就相当于unmap和map了
+    *pte &= ~PTE_COW;
+    (*cnt)--;
+  }
+  release(&cowmem.lock);
+  return 1;
+}
+
+int
+cowfree(void *pa)
+{
+  acquire(&cowmem.lock);
+  uint8 *cnt = get_ref_cnt(pa);
+  if (!(*cnt))
+    return 0;
+  if (!--(*cnt))
+    kfree(pa);
+  release(&cowmem.lock);
+  return 1;
 }

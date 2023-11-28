@@ -5,6 +5,7 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "defs.h"
 
 /*
  * the kernel's page table.
@@ -180,7 +181,10 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       panic("uvmunmap: not a leaf");
     if(do_free){
       uint64 pa = PTE2PA(*pte);
-      kfree((void*)pa);
+      if ((*pte & PTE_COW || (*pte & PTE_R && !(*pte & PTE_W))) && cowfree((void *)pa)) // cowfree的返回值判断只读的页有没有引用计数，在fork时不给只读页面cow位，但也会增加引用计数，普通只读页面引用计数为0
+        ; // OK
+      else 
+        kfree((void *)pa);
     }
     *pte = 0;
   }
@@ -269,7 +273,7 @@ freewalk(pagetable_t pagetable)
   // there are 2^9 = 512 PTEs in a page table.
   for(int i = 0; i < 512; i++){
     pte_t pte = pagetable[i];
-    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){//pte不是在uvmunmap置为0了吗??所以递归到物理地址就终止了
       // this PTE points to a lower-level page table.
       uint64 child = PTE2PA(pte);
       freewalk((pagetable_t)child);
@@ -310,13 +314,15 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
+    if (*pte & PTE_COW || *pte & PTE_W){//如果都给cow位的话，就无法区分只读页面，给只读页面写的话，也会分配新页
+      *pte |= PTE_COW;
+      *pte &= ~PTE_W;
+    }
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
+    if((mem = cowalloc((void *)pa)) == 0)
       goto err;
-    memmove(mem, (char*)pa, PGSIZE);
     if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
       goto err;
     }
   }
@@ -340,6 +346,32 @@ uvmclear(pagetable_t pagetable, uint64 va)
   *pte &= ~PTE_U;
 }
 
+uint64
+cowwalkaddr(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte;
+  uint64 pa;
+
+  if (va >= MAXVA)
+    return 0;
+
+  pte = walk(pagetable, va, 0);
+  if (pte == 0)
+    return 0;
+  if ((*pte & PTE_V) == 0)
+    return 0;
+  if ((*pte & PTE_U) == 0)
+    return 0;
+  // pa = PTE2PA(*pte);我特么之前这句在这块，所以相当于没更改，所以我做了copy，但用的还是之前共享的且此时可以相互影响
+  if (*pte & PTE_COW)
+  {
+    if (!cowcopy(pte))
+      return 0;
+  }
+  pa = PTE2PA(*pte);//果然cv的地方最有可能出错了
+  return pa;
+}
+
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
@@ -350,7 +382,10 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
+    if (va0 >= MAXVA)
+      return -1;
+    if(!(pa0 = cowwalkaddr(pagetable, va0)))
+      return -1;
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);

@@ -49,7 +49,10 @@ usertrap(void)
   
   // save user program counter.
   p->trapframe->epc = r_sepc();
-  
+
+  uint64 va = r_stval();
+  pte_t *pte;
+
   if(r_scause() == 8){
     // system call
 
@@ -65,7 +68,15 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  }
+  else if (r_scause() == 15 && va<MAXVA&&*(pte=walk(p->pagetable, va, 0))&PTE_COW)
+  {
+    if (r_stval() > p->sz || !cowcopy(pte)) // 如果发生 COW 页面错误并且没有可用内存，则应终止该进程
+      p->killed = 1;
+    if (p->killed)
+      exit(-1);
+    intr_on();
+    } else if((which_dev = devintr()) != 0){
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
