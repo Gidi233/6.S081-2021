@@ -10,10 +10,30 @@
 #define STACK_SIZE  8192
 #define MAX_THREAD  4
 
+struct context
+{
+  uint64 ra; // caller-saved  默认不保存的寄存器，除了ra等有用的（此处只有ra）存在栈帧里，其他的都是临时的都可以不要
+  uint64 sp;
+
+  // callee-saved
+  uint64 s0;
+  uint64 s1;
+  uint64 s2;
+  uint64 s3;
+  uint64 s4;
+  uint64 s5;
+  uint64 s6;
+  uint64 s7;
+  uint64 s8;
+  uint64 s9;
+  uint64 s10;
+  uint64 s11;
+};
 
 struct thread {
   char       stack[STACK_SIZE]; /* the thread's stack */
   int        state;             /* FREE, RUNNING, RUNNABLE */
+  struct context context;
 };
 struct thread all_thread[MAX_THREAD];
 struct thread *current_thread;
@@ -50,6 +70,7 @@ thread_schedule(void)
   }
 
   if (next_thread == 0) {
+    // thread_switch((uint64)&all_thread[3].context, (uint64)&all_thread[0].context); // 这里再切一下，就能回到主线程正常退出
     printf("thread_schedule: no runnable threads\n");
     exit(-1);
   }
@@ -62,6 +83,7 @@ thread_schedule(void)
      * Invoke thread_switch to switch from t to next_thread:
      * thread_switch(??, ??);
      */
+    thread_switch((uint64)&t->context, (uint64)&current_thread->context);//就第一次用到调度器(感觉都不能称它为调度器，就只是把主线程的状态保存了，后面没有再用到)了，其他时间都是子线程在相互切换
   } else
     next_thread = 0;
 }
@@ -76,6 +98,8 @@ thread_create(void (*func)())
   }
   t->state = RUNNABLE;
   // YOUR CODE HERE
+  t->context.ra = (uint64)func;
+  t->context.sp = (uint64)t->stack + STACK_SIZE;
 }
 
 void 
