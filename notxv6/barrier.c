@@ -25,6 +25,17 @@ barrier_init(void)
 static void 
 barrier()
 {
+  pthread_mutex_lock(&bstate.barrier_mutex);
+  bstate.nthread++;
+  if (bstate.nthread == nthread){
+    bstate.round++;
+    bstate.nthread = 0;
+    pthread_cond_broadcast(&bstate.barrier_cond);
+  }else{
+    pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);
+  }
+  // pthread_cond_wait(&bstate.barrier_cond, &bstate.barrier_mutex);之前在这里，就会把上一轮的最后一个一直wait，已到达barrier的线程也永远达不到nthread，没人来唤醒，最后就都一直wait了
+  pthread_mutex_unlock(&bstate.barrier_mutex);
   // YOUR CODE HERE
   //
   // Block until all threads have called barrier() and
