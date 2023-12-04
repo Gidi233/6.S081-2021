@@ -1,6 +1,6 @@
 // Saved registers for kernel context switches.
 struct context {
-  uint64 ra;
+  uint64 ra; // caller-saved  默认不保存的寄存器，除了ra等有用的（此处只有ra）存在栈帧里，其他的都是临时的都可以不要
   uint64 sp;
 
   // callee-saved
@@ -21,7 +21,7 @@ struct context {
 // Per-CPU state.
 struct cpu {
   struct proc *proc;          // The process running on this cpu, or null.
-  struct context context;     // swtch() here to enter scheduler().
+  struct context context;     // swtch() here to enter scheduler(). 从内核线程sched到调度器
   int noff;                   // Depth of push_off() nesting.
   int intena;                 // Were interrupts enabled before push_off()?
 };

@@ -453,7 +453,7 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
-        swtch(&c->context, &p->context);
+        swtch(&c->context, &p->context); // 相当于是主动让出的中断了(voluntary scheduling）
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
@@ -487,7 +487,7 @@ sched(void)
     panic("sched interruptible");
 
   intena = mycpu()->intena;
-  swtch(&p->context, &mycpu()->context);
+  swtch(&p->context, &mycpu()->context);//不用存pc指针,系统调用时因为跨程序了要保存，在这里ra保存了返回的指令地址
   mycpu()->intena = intena;
 }
 
