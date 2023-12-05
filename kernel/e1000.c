@@ -63,7 +63,7 @@ e1000_init(uint32 *xregs)
   if(sizeof(rx_ring) % 128 != 0)
     panic("e1000");
   regs[E1000_RDH] = 0;
-  regs[E1000_RDT] = RX_RING_SIZE - 1;
+  regs[E1000_RDT] = RX_RING_SIZE - 1;//所以每次recv要先把下标进一才能读到网卡写入的描述符，总感觉跟menu里描述的不同[3.2.6.RDT]
   regs[E1000_RDLEN] = sizeof(rx_ring);
 
   // filter by qemu's MAC address, 52:54:00:12:34:56
@@ -91,20 +91,35 @@ e1000_init(uint32 *xregs)
   regs[E1000_RADV] = 0; // interrupt after every packet (no timer)
   regs[E1000_IMS] = (1 << 7); // RXDW -- Receiver Descriptor Write Back
 }
-
 int
 e1000_transmit(struct mbuf *m)
 {
-  //
-  // Your code here.
-  //
-  // the mbuf contains an ethernet frame; program it into
-  // the TX descriptor ring so that the e1000 sends it. Stash
-  // a pointer so that it can be freed after sending.
-  //
-  
-  return 0;
+  acquire(&e1000_lock);
+  uint32 i = regs[E1000_TDT] % TX_RING_SIZE;
+  // 那mbuf->next是干啥的：系统内部连接包使用的结构，驱动这里用不到
+
+  if (tx_ring[i].status & E1000_TXD_STAT_DD)
+  {
+    if (tx_mbufs[i])
+      mbuffree(tx_mbufs[i]);
+    // m->head = m->buf;
+    tx_mbufs[i] = m;
+    memset(&tx_ring[i], 0, sizeof(tx_ring[i]));
+    tx_ring[i].addr = (uint64)m->head;
+    tx_ring[i].length = m->len;
+    tx_ring[i].cmd = E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
+    regs[E1000_TDT] = (regs[E1000_TDT] + 1) % TX_RING_SIZE;
+    release(&e1000_lock);
+    return 0;
+  }
+  else
+  {
+    release(&e1000_lock);
+    return -1;
+  }
 }
+// mbuf是在系统中传输用的结构，*x_ring才是网卡会改变的
+// 驱动做的是从*x_ring读取状态、更改，写到mbuf，传给系统做处理
 
 static void
 e1000_recv(void)
@@ -115,7 +130,30 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
+
+
+  uint32 i =  (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+  while (rx_ring[i].status & E1000_RXD_STAT_DD)
+  {
+    regs[E1000_RDT] = i;
+    rx_mbufs[i]->len = rx_ring[i].length;
+    net_rx(rx_mbufs[i]);
+    
+    rx_mbufs[i] = mbufalloc(0);
+    // if (!rx_mbufs[i])加了这行自动测试过不去？？手动可以？？？
+      // panic("e1000");
+    rx_ring[i].addr = (uint64)rx_mbufs[i]->head;
+    // if (rx_ring[i].status & E1000_RXD_STAT_EOP){//为啥不要这个啊:传输以一个包为最小单位，EOP代表这一个包传输完毕，而不是整个传输完毕，ring中还可以有别的包，当处理中断时ring满了就不会再触发中断接收了
+    //   rx_ring[i].status = 0;
+    //   break;
+    // }
+    rx_ring[i].status = 0;
+    //  If software statically allocates buffers, and uses memory read to check for completed descriptors, it simply has to zero the status byte in the descriptor to make it ready for reuse by hardware.
+    i = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+  }
 }
+// e1000_recv 不可以和e1000_transmit 用同一把锁，如果recv接收到一个arp包，会在recv 内部发送arp回包，从而调用e1000_transmit，两者用同一把锁就死锁了
+// 因为PLIC允许每个设备一次最多引发一个中断,所以recv可以不要锁
 
 void
 e1000_intr(void)
