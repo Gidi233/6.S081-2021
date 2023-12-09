@@ -61,6 +61,9 @@ initlock(struct spinlock *lk, char *name)
 void
 acquire(struct spinlock *lk)
 {
+  // if (lk->name && lk->name[0] == 'l') // 不以此为条件的话，输出时莫名程序卡死（有的锁没name，解引用空指针导致的？（段错误？））
+      // printf("acquire:%s cpu:%p from:%p\n", lk->name, mycpu(),lk->cpu);
+
   push_off(); // disable interrupts to avoid deadlock.
   if(holding(lk))
     panic("acquire");
@@ -95,6 +98,8 @@ acquire(struct spinlock *lk)
 void
 release(struct spinlock *lk)
 {
+  // if (lk->name && lk->name[0] == 'l')
+    // printf("release:%s cpu:%p from:%p\n", lk->name, mycpu(),lk->cpu);
   if(!holding(lk))
     panic("release");
 
