@@ -145,7 +145,7 @@ sys_link(void)
   if((dp = nameiparent(new, name)) == 0)
     goto bad;
   ilock(dp);
-  if(dp->dev != ip->dev || dirlink(dp, name, ip->inum) < 0){
+  if(dp->dev != ip->dev || dirlink(dp, name, ip->inum) < 0){//硬链接不能跨硬盘
     iunlockput(dp);
     goto bad;
   }
@@ -254,6 +254,8 @@ create(char *path, short type, short major, short minor)
     ilock(ip);
     if(type == T_FILE && (ip->type == T_FILE || ip->type == T_DEVICE))
       return ip;
+    if (type == T_SYMLINK && ip->type == T_SYMLINK )
+      return ip;
     iunlockput(ip);
     return 0;
   }
@@ -284,6 +286,62 @@ create(char *path, short type, short major, short minor)
 }
 
 uint64
+sys_symlink(void)
+{
+  char path[MAXPATH], target[MAXPATH];
+  struct inode *ip;
+  if (argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+  ip = create(path, T_SYMLINK, 0, 0);
+  if (ip == 0)
+  {
+    end_op();
+    return -1;
+  }
+
+  // ilock(ip); create里上锁了感觉  卡了我faking 1 h
+
+  ip->nlink++;  
+  writei(ip, 0, (uint64)target, 0, strlen(target) + 1);
+  // 最开始忘了writei
+  // uint addr;
+  // ip->addrs[0] =addr= balloc(ip->dev);
+  // struct buf *b=bread(ip->dev, addr);
+  // memmove(b->data,target,strlen(target)+1);
+  //
+
+
+  // if ((dp = nameiparent(path, name)) == 0)create里面dirlink过了
+  //   goto bad;
+  // ilock(dp);
+  // if (dp->dev != ip->dev || dirlink(dp, name, ip->inum) < 0)
+  // {
+  //   iunlockput(dp);
+  //   goto bad;
+  // }
+
+  iupdate(ip); // iput里iupdate过了,但不更新的话，inode缓冲区刷掉了，从buf缓冲区里读里读，会读到旧数据。ip->ref 是活跃的引用数，ip->nlink是硬链接数
+  iunlockput(ip);
+
+  end_op();
+
+  return 0;
+
+// bad:
+//   ilock(ip);
+//   ip->nlink--;
+//   // brelse(b);
+//   // bfree(ip->dev,addr);
+//   // ip->addrs[0] = 0;
+//   iupdate(ip);
+//   iunlockput(ip);
+//   end_op();
+//   return -1;
+}
+
+uint64
 sys_open(void)
 {
   char path[MAXPATH];
@@ -309,6 +367,26 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
+    if(!(omode & O_NOFOLLOW)){
+      char target[MAXPATH];
+      int t = 0;
+      while (ip->type == T_SYMLINK)
+      {
+        if(t>=10) {
+          iunlockput(ip); 
+          end_op();//把提交日志也忘了
+          return -1;
+        }
+        readi(ip, 0, (uint64)target, 0, MAXPATH);
+        iunlockput(ip); // 没有unlockput就换走了
+        if ((ip = namei(target)) == 0){
+          end_op();
+          return -1;
+        }
+        ilock(ip); //
+        t++;
+      }
+    }
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
