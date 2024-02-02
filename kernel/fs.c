@@ -378,7 +378,7 @@ static uint
 bmap(struct inode *ip, uint bn)
 {
   uint addr, *a;
-  struct buf *bp;
+  struct buf *bp,*bp2;
 
   if(bn < NDIRECT){
     if((addr = ip->addrs[bn]) == 0)
@@ -400,6 +400,28 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+  bn -= NINDIRECT;
+
+  if(bn < NDBINDIRECT){
+    if((addr = ip->addrs[NDIRECT+1]) == 0)
+      ip->addrs[NDIRECT+1] = addr = balloc(ip->dev);
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    int index1=bn/NINDIRECT, index2=bn%NINDIRECT;
+    if((addr = a[index1]) == 0){
+      a[index1] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    bp2 = bread(ip->dev, addr);
+    a = (uint*)bp2->data;
+    if((addr = a[index2]) == 0){
+      a[index2] = addr = balloc(ip->dev);
+      log_write(bp2);
+    }
+    brelse(bp);
+    brelse(bp2);
+    return addr;
+  }
 
   panic("bmap: out of range");
 }
@@ -410,8 +432,8 @@ void
 itrunc(struct inode *ip)
 {
   int i, j;
-  struct buf *bp;
-  uint *a;
+  struct buf *bp,*bp2;
+  uint *a,*b;
 
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
@@ -431,6 +453,32 @@ itrunc(struct inode *ip)
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
   }
+
+  if(ip->addrs[NDIRECT+1]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT+1]);
+    a = (uint*)bp->data;
+    for(j = 0; j < NINDIRECT; j++){
+      if (a[j]){
+        bp2 = bread(ip->dev, a[j]);
+        b = (uint *)bp2->data;
+        for (int k = 0; k < NINDIRECT; k++)
+        {
+          if (b[k])
+            bfree(ip->dev, b[k]);
+          else
+            break;//ip->size除了截断（xv6里也只有截断到0）不会减小，中间不会空出未分配的块，所以应该可以break
+        }
+        brelse(bp2);
+        bfree(ip->dev, a[j]);
+      }
+      else
+        break;
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT+1]);
+    ip->addrs[NDIRECT+1] = 0;
+  }
+  // 莫名其妙又是virtio_disk_intr status又是freeing free block的debug半天，感觉没改啥有自己好了
 
   ip->size = 0;
   iupdate(ip);
