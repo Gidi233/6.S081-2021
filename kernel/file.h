@@ -27,6 +27,9 @@ struct inode {
   short nlink;
   uint size;
   uint addrs[NDIRECT+1];
+  // pagetable_t pagetable; // 如果要共享的话，应该在inode(file那一层是进程私有的)这一层记录从文件偏移量到pa的页表，将每个共享的映射都同步到这里，mmap时从这里找对应的pa，更新页表
+  // uint8 refs[]//记录每一块的引用计数
+  // 注：系统调用规定offset必须是系统分页大小的倍数，不用考虑用户进程中一页映射到pa中两页各一部分的情况
 };
 
 // map major device number to device functions.

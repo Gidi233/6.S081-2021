@@ -5,6 +5,12 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
+#include "fcntl.h"
+#include "sleeplock.h"//按理说sleeplock在defs里预声明了，但放在file.h后面，file就找不到sleeplock。 迷惑
+#include "file.h"
+// defs.h 里的算是对结构体的预声明，具体的声明在**.h里,一直编译不成功 搁着包头文件 包好长时间，最终还是得按照关系，把被包含的先放在前面
 
 /*
  * the kernel's page table.
@@ -175,7 +181,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
     if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+      continue;//要是在mmap时不增加p->sz，从一个高地址来映射（即把mmap与进程动态分配内存分开），这里就不用改
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -309,7 +315,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      continue;
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -431,4 +437,71 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int mymap(uint64 va, struct vma vma)
+{
+  // begin_op(); // 没写入的话不用记录日志
+  struct inode *ip = vma.mapfile->ip;
+  ilock(ip);
+  uint64 mem = (uint64)kalloc();//kalloc分配的是脏的
+  memset((void*)mem, 0, PGSIZE);//
+  readi(ip, 0, mem, vma.offset + ((va - vma.addr) / PGSIZE) * PGSIZE, PGSIZE);
+  iunlock(ip); // 这块不用put
+  // end_op();//
+
+  int perm = 0;
+
+  perm |= PTE_U;
+  if (vma.prot & PROT_READ)//prot flags记反了。。。
+    perm |= PTE_R;
+  if (vma.prot & PROT_EXEC)
+    perm |= PTE_X;
+  if (vma.prot & PROT_WRITE)
+    perm |= PTE_W;
+  if(mappages(myproc()->pagetable, va, PGSIZE, mem, perm)!=0)
+    panic("mappages failed");
+  return 0;
+}
+
+int myunmap(uint64 addr,int length){
+  struct proc *p = myproc();
+  int i;
+  for (i = 0; i < NVMA; i++)
+  {
+    if (p->vmas[i].valid && p->vmas[i].addr <= addr && addr < p->vmas[i].addr + p->vmas[i].length)
+      break;
+  }
+  if (i == NVMA)
+    return -1;
+// 由于是过了3周后再抓起来的 忘了可以直接调用filewrite,浪费了好长时间(这下面很大一部分逻辑就是filewrite),不过filewrite写回去的偏移量是f->off，所以复制过来也还得改就是了
+  pte_t *pte;
+  if (p->vmas[i].flags == MAP_SHARED)
+    begin_op();
+  int offset = addr - p->vmas[i].addr;
+  for (int len = 0; len < length && p->vmas[i].length > 0; len += PGSIZE)
+  {
+    if ((pte = walk(p->pagetable, addr+len, 0)))//第二个参数没加len。。。 又是个傻逼问题de了很久
+    {
+      if (p->vmas[i].flags == MAP_SHARED && *pte & PTE_D) //
+      {
+        ilock(p->vmas[i].mapfile->ip);
+        writei(p->vmas[i].mapfile->ip, 0, PTE2PA(*pte), offset + len + p->vmas[i].offset, PGSIZE);
+        iunlock(p->vmas[i].mapfile->ip);
+      }
+      uvmunmap(p->pagetable, addr + len, 1, 1);
+      p->vmas[i].length -= PGSIZE;
+    }
+  }
+  if (p->vmas[i].flags == MAP_SHARED)
+    end_op();
+
+  if (!p->vmas[i].length)
+  {
+    p->vmas[i].valid = 0;
+    fileclose(p->vmas[i].mapfile);
+  }
+  else if (p->vmas[i].addr == addr)
+    p->vmas[i].addr += length;
+  return 0;
 }

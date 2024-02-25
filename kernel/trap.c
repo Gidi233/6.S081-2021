@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -49,6 +50,7 @@ usertrap(void)
   
   // save user program counter.
   p->trapframe->epc = r_sepc();
+  uint64 val=r_stval();
   
   if(r_scause() == 8){
     // system call
@@ -68,11 +70,25 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
+    int i;
+    for (i = 0; i < NVMA; i++)
+    {
+      if (p->vmas[i].valid&&p->vmas[i].addr<=val&&val<p->vmas[i].addr+p->vmas[i].length)
+        break;
+    }
+    if(i==16)
+      goto BAD;
+    else if ((r_scause() == 13 && p->vmas[i].prot & PROT_READ) || (r_scause() == 15 && p->vmas[i].prot & PROT_WRITE))
+    {
+      mymap(val, p->vmas[i]);
+      goto OK;
+    }
+  BAD:
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
   }
-
+OK:
   if(p->killed)
     exit(-1);
 

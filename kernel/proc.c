@@ -5,6 +5,9 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
 
 struct cpu cpus[NCPU];
 
@@ -301,6 +304,11 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  memmove(np->vmas,p->vmas,sizeof(np->vmas));
+  for (int i = 0; i < NVMA; i++)
+    if (p->vmas[i].valid)
+      filedup(np->vmas[i].mapfile); // 相当于mmap时的dup  父子进程共享 同一个file结构（现实中dup fork确实会共享file结构甚至offset（不过file分得更细:文件描述符表(file descriptor table)，打开文件表(open file table)） ）
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -343,6 +351,9 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+  for (int i = 0; i < NVMA; i++)
+    if (p->vmas[i].valid)
+      myunmap(p->vmas[i].addr, p->vmas[i].length);
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){
